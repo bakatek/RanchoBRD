@@ -1,4 +1,7 @@
-# This is a platformio based build of the JC3248W535EN DEMO_LVGL Package
+# This is a platformio based build of the JC3248W535EN Rancho Board Package
+
+Je travaille sur platformio sur un esp32s3 Wroom 1 N16R8 platform espidf
+L'écran prend place dans le tableau de bord d'une voiture.
 
 ![alt text](docs/IMG_6782.jpg)
 
