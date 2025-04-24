@@ -17,6 +17,8 @@ l'écran prend place dans le tableau de bord d'une voiture.
 #include <driver/i2c.h> // Ajout pour l'I2C
 #include <esp_heap_caps.h> // Ajout pour l'allocation dans la PSRAM
 #include <esp_psram.h> // Ajout pour les fonctions PSRAM
+#include <esp_wifi.h>
+//#include <esp_bt.h>
 
 //#include "icon_battery.c"
 //extern const lv_img_dsc_t icon_battery; // If declared in a separate file
@@ -63,7 +65,9 @@ static esp_err_t pcf8575_init(void);
 static esp_err_t pcf8575_write(uint16_t value);
 static esp_err_t pcf8575_read(uint16_t *value);
 
+/* Optimisations */
 
+/* Optimisations */
 
 static const char *TAG = "RANCHO_BRD";
 
@@ -1275,6 +1279,7 @@ void setup(void){
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
         .buffer_size = EXAMPLE_LCD_QSPI_H_RES * EXAMPLE_LCD_QSPI_V_RES,
+        
   #if LVGL_PORT_ROTATION_DEGREE == 90
         .rotate = LV_DISP_ROT_90,
   #elif LVGL_PORT_ROTATION_DEGREE == 270
@@ -1301,6 +1306,12 @@ void setup(void){
 
 // Point d'entrée pour ESP32 (exemple pour ESP-IDF)
 void app_main(void) {
+    // Désactiver Wi-Fi
+    esp_wifi_stop();
+
+    // Désactiver Bluetooth
+    //esp_bt_controller_disable();
+
     // Vérifier que la PSRAM est disponible
     if (esp_psram_is_initialized()) {
         ESP_LOGI(TAG, "PSRAM initialisée, taille: %zu bytes", esp_psram_get_size());

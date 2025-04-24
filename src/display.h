@@ -37,6 +37,8 @@
 #define EXAMPLE_LCD_QSPI_H_RES      (320)
 #define EXAMPLE_LCD_QSPI_V_RES      (480)
 
+
+
 /**
  * @brief Tear configuration structure
  *

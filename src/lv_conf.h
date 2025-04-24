@@ -69,7 +69,15 @@
     #define LV_MEM_CUSTOM_REALLOC realloc
 #endif     /*LV_MEM_CUSTOM*/
 
+/* Optimisations */
 #define LV_MEM_SIZE (64U * 1024U)
+
+#define LV_HOR_RES_MAX 320
+#define LV_VER_RES_MAX 480
+#define LV_COLOR_DEPTH 16 // 16 bits pour RGB565*/
+//#define LV_DISP_DEF_REFR_PERIOD 33 // Rafraîchissement à ~30 Hz
+/* Optimisations */
+
 
 /*Number of the intermediate memory buffer used during rendering and other internal processing mechanisms.
  *You will see an error log message if there wasn't enough buffers. */
@@ -348,7 +356,7 @@
 #define LV_ATTRIBUTE_LARGE_RAM_ARRAY
 
 /*Place performance critical functions into a faster memory (e.g RAM)*/
-#define LV_ATTRIBUTE_FAST_MEM
+#define LV_ATTRIBUTE_FAST_MEM IRAM_ATTR
 
 /*Prefix variables that are used in GPU accelerated operations, often these need to be placed in RAM sections that are DMA accessible*/
 #define LV_ATTRIBUTE_DMA

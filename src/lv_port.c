@@ -90,8 +90,41 @@ static void lvgl_port_touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *
 * Public API functions
 *******************************************************************************/
 
+
+/* Optimisations  */
+#include <esp_heap_caps.h>
+#include <lvgl.h>
+
+// Déclarer les tampons dans la PSRAM
+/*static lv_disp_draw_buf_t draw_buf;
+static lv_color_t *buf1 = NULL;
+static lv_color_t *buf2 = NULL;*/
+/* Optimisations  */
+
+
 esp_err_t lvgl_port_init(const lvgl_port_cfg_t *cfg)
 {
+
+    // Allouer les tampons dans la PSRAM
+    /*buf1 = (lv_color_t *)heap_caps_malloc(320 * 10 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    buf2 = (lv_color_t *)heap_caps_malloc(320 * 10 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+    if (!buf1 || !buf2) {
+        ESP_LOGE("Display", "Échec allocation tampons PSRAM");
+        return ESP_ERR_NO_MEM;
+    }
+
+    // Initialiser le tampon de dessin LVGL
+    lv_disp_draw_buf_init(&draw_buf, buf1, buf2, 320 * 10);
+
+    // Configurer le pilote d'affichage
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res = 320;
+    disp_drv.ver_res = 480;
+    disp_drv.flush_cb = lvgl_port_flush_callback; // Remplacer par votre fonction de rendu
+    disp_drv.draw_buf = &draw_buf;
+    lv_disp_drv_register(&disp_drv);*/
+
     esp_err_t ret = ESP_OK;
     ESP_GOTO_ON_FALSE(cfg, ESP_ERR_INVALID_ARG, err, TAG, "invalid argument");
     ESP_GOTO_ON_FALSE(cfg->task_affinity < (configNUM_CORES), ESP_ERR_INVALID_ARG, err, TAG, "Bad core number for task! Maximum core number is %d", (configNUM_CORES - 1));
