@@ -20,6 +20,10 @@ l'écran prend place dans le tableau de bord d'une voiture.
 #include <esp_wifi.h>
 //#include <esp_bt.h>
 
+#include "audio.h"
+#include "audio.c"
+
+
 //#include "icon_battery.c"
 //extern const lv_img_dsc_t icon_battery; // If declared in a separate file
 
@@ -1352,6 +1356,14 @@ void app_main(void) {
     // Initialiser la montre
     clock_init();
 
+    bool insideLoop = false;
+
+    // Initialiser l'audio
+    audio_init();
+        
+    // Jouer la musique de démarrage
+    play_startup_tune();
+
     // Boucle principale
     while (1) {
         bsp_display_lock(0);
@@ -1359,6 +1371,11 @@ void app_main(void) {
         lv_timer_handler();
         bsp_display_unlock();
         vTaskDelay(100 / portTICK_PERIOD_MS);
+        if (!insideLoop){
+            // Jouer la musique de démarrage
+            play_startup_tune();
+        }
+        insideLoop = true;
 
         // Resynchroniser toutes les 3600 secondes (1 heure)
         static uint32_t last_sync = 0;
