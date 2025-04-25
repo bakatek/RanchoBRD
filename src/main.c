@@ -21,13 +21,12 @@ DIR /S /B | FIND /V "\.pio\" | FIND /V "\.vscode\" | FIND /V "\.git\"
 #include <esp_heap_caps.h> // Ajout pour l'allocation dans la PSRAM
 #include <esp_psram.h> // Ajout pour les fonctions PSRAM
 #include <esp_wifi.h>
+#include <nvs_flash.h>
 //#include <esp_bt.h>
-
 #include "pictos.h"
-
 #include "audio.h"
 #include "audio.c"
-
+#include "../../wifiCred.h"
 
 //#include "icon_battery.c"
 //extern const lv_img_dsc_t icon_battery; // If declared in a separate file
@@ -44,7 +43,11 @@ DIR /S /B | FIND /V "\.pio\" | FIND /V "\.vscode\" | FIND /V "\.git\"
 #define SECOND_HAND_LENGTH CANVAS_HEIGHT/2 -5
 #define LVGL_PORT_ROTATION_DEGREE (90)
 
-
+// Variables pour la gestion Wi-Fi
+static int s_retry_num = 0;
+static EventGroupHandle_t s_wifi_event_group;
+static const int WIFI_CONNECTED_BIT = BIT0;
+static const int WIFI_FAIL_BIT = BIT1;
 
 
 // Prototypes des fonctions PCF8575
@@ -73,7 +76,85 @@ static lv_obj_t *date_label = NULL; // Étiquette pour le jour du mois
 static lv_obj_t *date_window = NULL; // Rectangle pour la fenêtre de date
 static int last_day = -1; // Dernier jour affiché (-1 pour forcer la première mise à jour)
 
+// Gestionnaire d'événements Wi-Fi
+static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        ESP_LOGI(TAG, "Wi-Fi démarré, tentative de connexion...");
+        lv_timer_handler();
+        esp_wifi_connect();
+        lv_timer_handler();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (s_retry_num < WIFI_MAX_RETRY) {
+            ESP_LOGI(TAG, "Déconnexion Wi-Fi, tentative de reconnexion (%d/%d)...", s_retry_num + 1, WIFI_MAX_RETRY);
+            lv_timer_handler();
+            esp_wifi_connect();
+            lv_timer_handler();
+            s_retry_num++;
+        } else {
+            ESP_LOGE(TAG, "Échec de connexion Wi-Fi après %d tentatives", WIFI_MAX_RETRY);
+            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+            vTaskDelay(pdMS_TO_TICKS(WIFI_RECONNECT_DELAY_MS));
+            s_retry_num = 0;
+            lv_timer_handler();
+            esp_wifi_connect(); // Nouvelle tentative après délai
+            lv_timer_handler();
+        }
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(TAG, "Adresse IP obtenue: " IPSTR, IP2STR(&event->ip_info.ip));
+        s_retry_num = 0;
+        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+    }
+}
 
+// Initialisation Wi-Fi
+static void wifi_init(void) {
+    // Initialiser NVS
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    // Créer le groupe d'événements
+    s_wifi_event_group = xEventGroupCreate();
+
+    // Initialiser la pile réseau
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+    // Configurer le Wi-Fi
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    // Enregistrer le gestionnaire d'événements
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
+
+    // Configurer les paramètres du point d'accès
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASSWORD,
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+        },
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    ESP_LOGI(TAG, "Initialisation Wi-Fi terminée, connexion à %s...", WIFI_SSID);
+
+    // Attendre la connexion ou l'échec
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
+    if (bits & WIFI_CONNECTED_BIT) {
+        ESP_LOGI(TAG, "Connecté au Wi-Fi");
+    } else if (bits & WIFI_FAIL_BIT) {
+        ESP_LOGE(TAG, "Échec initial de connexion au Wi-Fi, reconnexion automatique activée");
+    }
+}
 
 
 void update_dashboard_icons(uint16_t pcf8575_state) {
@@ -638,8 +719,7 @@ void setup(void){
 
 // Point d'entrée pour ESP32 (exemple pour ESP-IDF)
 void app_main(void) {
-    // Désactiver Wi-Fi
-    esp_wifi_stop();
+
 
     // Désactiver Bluetooth
     //esp_bt_controller_disable();
@@ -702,6 +782,9 @@ void app_main(void) {
         if (!insideLoop){
             // Jouer la musique de démarrage
             play_startup_tune();
+
+            // Initialiser le Wi-Fi
+            wifi_init();
         }
         insideLoop = true;
 
