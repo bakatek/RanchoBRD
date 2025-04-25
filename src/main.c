@@ -4,6 +4,8 @@ je travaille sur platformio sur un esp32s3 Wroom 1 N16R8 platform espidf
 
 l'écran prend place dans le tableau de bord d'une voiture.
 
+Listing de tous les fichiers du projet.
+DIR /S /B | FIND /V "\.pio\" | FIND /V "\.vscode\" | FIND /V "\.git\"
 */
 
 

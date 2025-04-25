@@ -89,138 +89,56 @@ void play_warning(void) {
 }
 
 
-// Jouer la musique de démarrage (bong PCM)
+// Fonction générique pour jouer un son PCM
+static void play_pcm(const int16_t *pcm, uint32_t pcm_size) {
+    static int16_t buffer[I2S_BUFFER_SIZE];
+    uint32_t samples_written = 0;
+    uint32_t last_lvgl_update = 0;
+
+    while (samples_written < pcm_size) {
+        uint32_t samples_to_write = (pcm_size - samples_written) > I2S_BUFFER_SIZE ? 
+                                    I2S_BUFFER_SIZE : (pcm_size - samples_written);
+        for (uint32_t i = 0; i < samples_to_write; i++) {
+            buffer[i] = pcm[samples_written + i];
+        }
+        size_t bytes_written;
+        i2s_channel_write(tx_handle, buffer, samples_to_write * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+        samples_written += samples_to_write;
+        uint32_t current_ms = samples_written / (I2S_SAMPLE_RATE / 1000);
+        if (current_ms - last_lvgl_update >= 10) {
+            lv_timer_handler();
+            last_lvgl_update = current_ms;
+        }
+    }
+}
+
+
+// Jouer la musique de démarrage (bong)
 void play_startup_tune(void) {
-    static int16_t buffer[I2S_BUFFER_SIZE];
-    uint32_t samples_written = 0;
-    uint32_t last_lvgl_update = 0;
     ESP_LOGI(TAG2, "Jouer musique de démarrage style Mac");
-
-    while (samples_written < startup_pcm_size) {
-        uint32_t samples_to_write = (startup_pcm_size - samples_written) > I2S_BUFFER_SIZE ? 
-                                    I2S_BUFFER_SIZE : (startup_pcm_size - samples_written);
-        // Copier directement les échantillons PCM (mono)
-        for (uint32_t i = 0; i < samples_to_write; i++) {
-            buffer[i] = startup_pcm[samples_written + i];
-        }
-        size_t bytes_written;
-        i2s_channel_write(tx_handle, buffer, samples_to_write * sizeof(int16_t), &bytes_written, portMAX_DELAY);
-        samples_written += samples_to_write;
-
-        // Mettre à jour LVGL toutes les 10 ms
-        uint32_t current_ms = samples_written / (I2S_SAMPLE_RATE / 1000);
-        if (current_ms - last_lvgl_update >= 10) {
-            lv_timer_handler();
-            last_lvgl_update = current_ms;
-        }
-    }
+    play_pcm(startup_pcm, startup_pcm_size);
 }
 
-// Jouer la musique des phares
-void play_phares_tune(void) {
-    static int16_t buffer[I2S_BUFFER_SIZE];
-    uint32_t samples_written = 0;
-    uint32_t last_lvgl_update = 0;
-    ESP_LOGI(TAG2, "Jouer musique d'activation Phares");
-
-    while (samples_written < phares_pcm_size) {
-        uint32_t samples_to_write = (phares_pcm_size - samples_written) > I2S_BUFFER_SIZE ? 
-                                    I2S_BUFFER_SIZE : (phares_pcm_size - samples_written);
-        // Copier directement les échantillons PCM (mono)
-        for (uint32_t i = 0; i < samples_to_write; i++) {
-            buffer[i] = phares_pcm[samples_written + i];
-        }
-        size_t bytes_written;
-        i2s_channel_write(tx_handle, buffer, samples_to_write * sizeof(int16_t), &bytes_written, portMAX_DELAY);
-        samples_written += samples_to_write;
-
-        // Mettre à jour LVGL toutes les 10 ms
-        uint32_t current_ms = samples_written / (I2S_SAMPLE_RATE / 1000);
-        if (current_ms - last_lvgl_update >= 10) {
-            lv_timer_handler();
-            last_lvgl_update = current_ms;
-        }
-    }
+// Jouer le son du clignotant
+void play_clignotant(void) {
+    ESP_LOGI(TAG2, "Jouer son clignotant");
+    play_pcm(clignotant_pcm, clignotant_pcm_size);
 }
 
-// Jouer la musique d'alerte
-void play_worried_tune(void) {
-    static int16_t buffer[I2S_BUFFER_SIZE];
-    uint32_t samples_written = 0;
-    uint32_t last_lvgl_update = 0;
-    ESP_LOGI(TAG2, "Jouer musique d'inquietude");
-
-    while (samples_written < worried_pcm_size) {
-        uint32_t samples_to_write = (worried_pcm_size - samples_written) > I2S_BUFFER_SIZE ? 
-                                    I2S_BUFFER_SIZE : (worried_pcm_size - samples_written);
-        // Copier directement les échantillons PCM (mono)
-        for (uint32_t i = 0; i < samples_to_write; i++) {
-            buffer[i] = worried_pcm[samples_written + i];
-        }
-        size_t bytes_written;
-        i2s_channel_write(tx_handle, buffer, samples_to_write * sizeof(int16_t), &bytes_written, portMAX_DELAY);
-        samples_written += samples_to_write;
-
-        // Mettre à jour LVGL toutes les 10 ms
-        uint32_t current_ms = samples_written / (I2S_SAMPLE_RATE / 1000);
-        if (current_ms - last_lvgl_update >= 10) {
-            lv_timer_handler();
-            last_lvgl_update = current_ms;
-        }
-    }
+// Jouer le son critique
+void play_critical(void) {
+    ESP_LOGI(TAG2, "Jouer son critique");
+    play_pcm(critical_pcm, critical_pcm_size);
 }
 
-// Jouer la musique d'erreur critique
-void play_critical_tune(void) {
-    static int16_t buffer[I2S_BUFFER_SIZE];
-    uint32_t samples_written = 0;
-    uint32_t last_lvgl_update = 0;
-    ESP_LOGI(TAG2, "Jouer musique critique");
-
-    while (samples_written < critical_pcm_size) {
-        uint32_t samples_to_write = (critical_pcm_size - samples_written) > I2S_BUFFER_SIZE ? 
-                                    I2S_BUFFER_SIZE : (critical_pcm_size - samples_written);
-        // Copier directement les échantillons PCM (mono)
-        for (uint32_t i = 0; i < samples_to_write; i++) {
-            buffer[i] = critical_pcm[samples_written + i];
-        }
-        size_t bytes_written;
-        i2s_channel_write(tx_handle, buffer, samples_to_write * sizeof(int16_t), &bytes_written, portMAX_DELAY);
-        samples_written += samples_to_write;
-
-        // Mettre à jour LVGL toutes les 10 ms
-        uint32_t current_ms = samples_written / (I2S_SAMPLE_RATE / 1000);
-        if (current_ms - last_lvgl_update >= 10) {
-            lv_timer_handler();
-            last_lvgl_update = current_ms;
-        }
-    }
+// Jouer le son des phares
+void play_phares(void) {
+    ESP_LOGI(TAG2, "Jouer son phares");
+    play_pcm(phares_pcm, phares_pcm_size);
 }
 
-// Jouer la musique clignotant
-void play_clignotant_tune(void) {
-    static int16_t buffer[I2S_BUFFER_SIZE];
-    uint32_t samples_written = 0;
-    uint32_t last_lvgl_update = 0;
-    ESP_LOGI(TAG2, "Jouer musique clignotant");
-
-    while (samples_written < clignotant_pcm_size) {
-        uint32_t samples_to_write = (clignotant_pcm_size - samples_written) > I2S_BUFFER_SIZE ? 
-                                    I2S_BUFFER_SIZE : (clignotant_pcm_size - samples_written);
-        // Copier directement les échantillons PCM (mono)
-        for (uint32_t i = 0; i < samples_to_write; i++) {
-            buffer[i] = clignotant_pcm[samples_written + i];
-        }
-        size_t bytes_written;
-        i2s_channel_write(tx_handle, buffer, samples_to_write * sizeof(int16_t), &bytes_written, portMAX_DELAY);
-        samples_written += samples_to_write;
-
-        // Mettre à jour LVGL toutes les 10 ms
-        uint32_t current_ms = samples_written / (I2S_SAMPLE_RATE / 1000);
-        if (current_ms - last_lvgl_update >= 10) {
-            lv_timer_handler();
-            last_lvgl_update = current_ms;
-        }
-    }
+// Jouer le son "worried"
+void play_worried(void) {
+    ESP_LOGI(TAG2, "Jouer son worried");
+    play_pcm(worried_pcm, worried_pcm_size);
 }
-
