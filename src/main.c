@@ -107,13 +107,13 @@ static lv_obj_t *date_label = NULL; // Étiquette pour le jour du mois
 static lv_obj_t *date_window = NULL; // Rectangle pour la fenêtre de date
 static int last_day = -1; // Dernier jour affiché (-1 pour forcer la première mise à jour)
 
-static lv_obj_t *rpm_arc = NULL;      // Arc pour le compte-tours
+static lv_obj_t *rpm_bar = NULL;      // Barre pour le compte-tours
 static lv_obj_t *speed_label = NULL;  // Étiquette pour la vitesse
 static lv_obj_t *gear_label = NULL;   // Étiquette pour le rapport de boîte
 static uint32_t rpm_pulse_count = 0;  // Compteur d'impulsions pour le compte-tours
 static uint32_t last_pulse_update = 0; // Dernière mise à jour des impulsions
 static uint16_t last_pcf8575_state = 0; // Dernier état du PCF8575 pour détecter les fronts
-static float gearbox_ratios[] = GEARBOX_RATIOS; // Tableau des rapports de boîte
+static float gearbox_ratios[] = {3.714, 2.222, 1.409, 1.000, 0.0}; // Rapports de boîte
 static int selected_gear = 4; // Rapport par défaut (4e vitesse, index 3)
 
 
@@ -613,8 +613,8 @@ static void clock_timer_cb2() {
         uint32_t rpm = (uint32_t)(frequency * 30); // RPM = fréquence * 60 / 2
         rpm_pulse_count = 0; // Réinitialiser le compteur
 
-        // Mettre à jour l'arc du compte-tours
-        lv_arc_set_value(rpm_arc, rpm > RPM_MAX ? RPM_MAX : rpm);
+        // Mettre à jour la barre du compte-tours
+        lv_bar_set_value(rpm_bar, rpm > RPM_MAX ? RPM_MAX : rpm, LV_ANIM_OFF);
 
         // Calculer la vitesse
         float gear_ratio = gearbox_ratios[selected_gear];
@@ -628,7 +628,6 @@ static void clock_timer_cb2() {
         snprintf(speed_str, sizeof(speed_str), "%.1f km/h", speed_kmh);
         lv_label_set_text(speed_label, speed_str);
 
-        
         // Log pour débogage
         //ESP_LOGI("RPM_SPEED", "RPM: %u, Gear: %d, Speed: %.1f km/h", rpm, selected_gear, speed_kmh);
 
@@ -779,21 +778,19 @@ void clock_init(void) {
     lv_canvas_fill_bg(theCanvas, lv_color_hex(0x000000), LV_OPA_TRANSP); // Fond transparent
 
 
-    // Créer l'arc du compte-tours
-    rpm_arc = lv_arc_create(background_canvas);
-    lv_obj_set_size(rpm_arc, RPM_ARC_RADIUS * 2, RPM_ARC_RADIUS * 2);
-    lv_arc_set_rotation(rpm_arc, 150); // Commencer à -30° (150° depuis 0)
-    lv_arc_set_bg_angles(rpm_arc, 0, 240); // Arc de 240°
-    lv_arc_set_range(rpm_arc, 0, RPM_MAX);
-    lv_obj_align(rpm_arc, LV_ALIGN_CENTER, -80, 0); // Position à gauche de la montre
-    lv_obj_set_style_arc_color(rpm_arc, lv_color_hex(0xFF0000), LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(rpm_arc, 10, LV_PART_INDICATOR);
-    lv_arc_set_value(rpm_arc, 0); // Valeur initiale
+    // Créer la barre pour le compte-tours
+    rpm_bar = lv_bar_create(background_canvas);
+    lv_obj_set_size(rpm_bar, 150, 20); // Barre horizontale de 150px de large, 20px de haut
+    lv_bar_set_range(rpm_bar, 0, RPM_MAX); // Plage de 0 à 7000 RPM
+    lv_obj_align(rpm_bar, LV_ALIGN_BOTTOM_LEFT, 10, -10); // Coin bas gauche, 10px du bord gauche, 10px du bas
+    lv_obj_set_style_bg_color(rpm_bar, lv_color_hex(0x333333), LV_PART_MAIN); // Fond gris
+    lv_obj_set_style_bg_color(rpm_bar, lv_color_hex(0xFF0000), LV_PART_INDICATOR); // Barre rouge
+    lv_bar_set_value(rpm_bar, 0, LV_ANIM_OFF); // Valeur initiale
 
     // Créer l'étiquette pour la vitesse
     speed_label = lv_label_create(background_canvas);
     lv_label_set_text(speed_label, "0 km/h");
-    lv_obj_align(speed_label, LV_ALIGN_CENTER, 80, 0); // Position à droite de la montre
+    lv_obj_align(speed_label, LV_ALIGN_BOTTOM_RIGHT, -40, -50); // Au-dessus des boutons, centré entre btn_up et btn_down
     lv_obj_set_style_text_color(speed_label, lv_color_white(), LV_PART_MAIN);
     lv_obj_set_style_text_font(speed_label, &lv_font_montserrat_16, LV_PART_MAIN);
 
@@ -807,7 +804,7 @@ void clock_init(void) {
     // Créer des boutons pour changer le rapport de boîte
     lv_obj_t *btn_up = lv_btn_create(background_canvas);
     lv_obj_set_size(btn_up, 50, 30);
-    lv_obj_align(btn_up, LV_ALIGN_TOP_RIGHT, -10, 10);
+    lv_obj_align(btn_up, LV_ALIGN_BOTTOM_RIGHT, -10, -10); // Bas à droite, 10px du bord droit, 10px du bas
     lv_obj_t *label_up = lv_label_create(btn_up);
     lv_label_set_text(label_up, "+");
     lv_obj_center(label_up);
@@ -815,7 +812,7 @@ void clock_init(void) {
 
     lv_obj_t *btn_down = lv_btn_create(background_canvas);
     lv_obj_set_size(btn_down, 50, 30);
-    lv_obj_align(btn_down, LV_ALIGN_TOP_RIGHT, -70, 10);
+    lv_obj_align(btn_down, LV_ALIGN_BOTTOM_RIGHT, -70, -10); // Bas à droite, 70px du bord droit, 10px du bas
     lv_obj_t *label_down = lv_label_create(btn_down);
     lv_label_set_text(label_down, "-");
     lv_obj_center(label_down);
