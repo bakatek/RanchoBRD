@@ -42,10 +42,12 @@ Product weight              About 80g
 #include <esp_wifi.h>
 #include <nvs_flash.h>
 //#include <esp_bt.h>
+#include <esp_sntp.h>
 #include "pictos.h"
 #include "audio.h"
 #include "audio.c"
 #include "../../wifiCred.h"
+
 
 //#include "icon_battery.c"
 //extern const lv_img_dsc_t icon_battery; // If declared in a separate file
@@ -116,6 +118,37 @@ static uint16_t last_pcf8575_state = 0; // Dernier état du PCF8575 pour détect
 static float gearbox_ratios[] = {3.714, 2.222, 1.409, 1.000, 0.0}; // Rapports de boîte
 static int selected_gear = 4; // Rapport par défaut (4e vitesse, index 3)
 
+static esp_err_t ds3231_write_time(struct tm *timeinfo);
+
+static bool sntp_initialized = false;
+
+// Callback pour la synchronisation NTP
+static void ntp_time_sync_notification_cb(struct timeval *tv) {
+    ESP_LOGI("NTP", "Synchronisation NTP réussie, mise à jour du DS3231");
+    struct tm timeinfo;
+    time_t now = tv->tv_sec;
+    localtime_r(&now, &timeinfo);
+    esp_err_t ret = ds3231_write_time(&timeinfo);
+    if (ret != ESP_OK) {
+        ESP_LOGE("NTP", "Échec de la mise à jour du DS3231");
+    } else {
+        ESP_LOGI("NTP", "DS3231 mis à jour avec l'heure NTP");
+    }
+}
+
+// Initialisation de SNTP
+static void ntp_init(void) {
+    ESP_LOGI("NTP", "Initialisation de SNTP...");
+    if (sntp_initialized) {
+        esp_sntp_stop(); // Arrêter le client SNTP s'il est déjà en cours
+    }
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    sntp_set_time_sync_notification_cb(ntp_time_sync_notification_cb);
+    esp_sntp_init();
+    sntp_initialized = true;
+    ESP_LOGI("NTP", "SNTP initialisé, attente de synchronisation...");
+}
 
 // Gestionnaire d'événements Wi-Fi
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
@@ -140,15 +173,19 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
             esp_wifi_connect(); // Nouvelle tentative après délai
             lv_timer_handler();
         }
+        sntp_initialized = false; // Réinitialiser SNTP lors de la déconnexion
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Adresse IP obtenue: " IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        if (!sntp_initialized) {
+            ntp_init(); // Initialiser SNTP seulement si pas déjà fait
+        }
     }
 }
 
-// Initialisation Wi-Fi
+
 static void wifi_init(void) {
     // Initialiser NVS
     esp_err_t ret = nvs_flash_init();
@@ -192,6 +229,9 @@ static void wifi_init(void) {
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Connecté au Wi-Fi");
+        if (!sntp_initialized) {
+            ntp_init(); // Initialiser SNTP après connexion réussie
+        }
     } else if (bits & WIFI_FAIL_BIT) {
         ESP_LOGE(TAG, "Échec initial de connexion au Wi-Fi, reconnexion automatique activée");
     }
@@ -307,6 +347,41 @@ static esp_err_t i2c_master_init(void) {
 // Fonction pour convertir BCD en décimal
 static uint8_t bcd_to_dec(uint8_t bcd) {
     return ((bcd >> 4) * 10) + (bcd & 0x0F);
+}
+
+// Fonction pour écrire l'heure dans le DS3231
+static esp_err_t ds3231_write_time(struct tm *timeinfo) {
+    esp_err_t ret;
+    uint8_t data[7]; // Buffer pour secondes, minutes, heures, jour, date, mois, année
+
+    // Convertir en BCD pour le DS3231
+    data[0] = ((timeinfo->tm_sec / 10) << 4) | (timeinfo->tm_sec % 10); // Secondes
+    data[1] = ((timeinfo->tm_min / 10) << 4) | (timeinfo->tm_min % 10); // Minutes
+    data[2] = ((timeinfo->tm_hour / 10) << 4) | (timeinfo->tm_hour % 10); // Heures (format 24h)
+    data[3] = ((timeinfo->tm_wday + 1) % 7) + 1; // Jour de la semaine (1-7, Lun-Dim)
+    data[4] = ((timeinfo->tm_mday / 10) << 4) | (timeinfo->tm_mday % 10); // Jour du mois
+    data[5] = (((timeinfo->tm_mon + 1) / 10) << 4) | ((timeinfo->tm_mon + 1) % 10); // Mois (1-12)
+    data[6] = (((timeinfo->tm_year - 100) / 10) << 4) | ((timeinfo->tm_year - 100) % 10); // Année (années depuis 2000)
+
+    // Créer une commande I2C pour écrire les registres 0x00 à 0x06
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (DS3231_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, 0x00, true); // Commencer à l'adresse 0x00 (secondes)
+    i2c_master_write(cmd, data, 7, true);
+    i2c_master_stop(cmd);
+    ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, I2C_TIMEOUT_MS / portTICK_PERIOD_MS);
+    i2c_cmd_link_delete(cmd);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE("DS3231", "Échec de l'écriture de l'heure: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ESP_LOGI("DS3231", "Heure écrite: %02d:%02d:%02d %02d/%02d/%04d",
+             timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec,
+             timeinfo->tm_mday, timeinfo->tm_mon + 1, timeinfo->tm_year + 1900);
+    return ESP_OK;
 }
 
 // Fonction pour lire l'heure du DS3231
@@ -887,8 +962,10 @@ void app_main(void) {
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Échec de la synchronisation de l'heure avec DS3231");
     }
+    // Initialiser le Wi-Fi
+    wifi_init();
 
-
+    vTaskDelay(10000 / portTICK_PERIOD_MS);
 
     // Initialiser LVGL et le pilote d'affichage (à configurer selon votre écran)
     //lv_init();
@@ -917,21 +994,28 @@ void app_main(void) {
         if (!insideLoop){
             // Jouer la musique de démarrage
             play_startup_tune();
-
-            // Initialiser le Wi-Fi
-            wifi_init();
         }
         insideLoop = true;
+
 
         // Resynchroniser toutes les 3600 secondes (1 heure)
         static uint32_t last_sync = 0;
         uint32_t current_time = esp_log_timestamp() / 1000; // Temps en secondes
         if (current_time - last_sync >= 3600) {
-            esp_err_t ret = ds3231_sync_time();
-            if (ret == ESP_OK) {
-                ESP_LOGI("DS3231", "Resynchronisation périodique réussie");
+            // Vérifier si Wi-Fi est connecté
+            EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
+            if (bits & WIFI_CONNECTED_BIT) {
+                ESP_LOGI("SYNC", "Wi-Fi connecté, tentative de synchronisation NTP...");
+                // SNTP est déjà en cours, pas besoin de relancer ntp_init
+                // Attendre la synchronisation NTP (gérée par le callback)
             } else {
-                ESP_LOGE("DS3231", "Échec de la resynchronisation");
+                ESP_LOGI("SYNC", "Wi-Fi non connecté, synchronisation avec DS3231...");
+                esp_err_t ret = ds3231_sync_time();
+                if (ret == ESP_OK) {
+                    ESP_LOGI("DS3231", "Resynchronisation périodique réussie");
+                } else {
+                    ESP_LOGE("DS3231", "Échec de la resynchronisation");
+                }
             }
             last_sync = current_time;
         }
