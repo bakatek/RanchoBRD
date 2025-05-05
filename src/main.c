@@ -6,6 +6,25 @@ l'écran prend place dans le tableau de bord d'une voiture.
 
 Listing de tous les fichiers du projet.
 DIR /S /B | FIND /V "\.pio\" | FIND /V "\.vscode\" | FIND /V "\.git\"
+
+
+3.5 Inch JC3248W535C
+
+Name                        Describe
+Display color               RGB 65K color
+SKU                         Capacitive touch：JC3248W535C_I_Y
+Size                        3.5 inch
+Type                        TFT
+Driver chip                 AXS15231B
+Resolution                  320*480(Pixel)
+Effective display area      73.4* 49.0(mm)
+Module size                 94.5*62.0(mm)
+View                        IPS
+Operating temperature       -20℃~70℃
+storage temperature         -30℃~80℃
+Operating Voltage           5V
+Power consumption           About 150mA
+Product weight              About 80g
 */
 
 
