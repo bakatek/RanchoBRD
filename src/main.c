@@ -62,6 +62,18 @@ Product weight              About 80g
 #define SECOND_HAND_LENGTH CANVAS_HEIGHT/2 -5
 #define LVGL_PORT_ROTATION_DEGREE (90)
 
+
+// Définitions pour le compte-tours et la vitesse
+#define PCF8575_PIN_RPM 10        // Broche P10 pour les impulsions d'allumage
+#define PULSES_PER_REV 2          // 2 impulsions par tour pour un moteur 4 cylindres
+#define WHEEL_CIRCUMFERENCE 1.93  // Circonférence de la roue en mètres (185/70 R14)
+#define GEARBOX_RATIOS {3.714, 2.222, 1.409, 1.000, 0.0} // Rapports de boîte (1re, 2e, 3e, 4e, neutre)
+#define FINAL_DRIVE_RATIO 4.111   // Rapport de pont
+#define RPM_ARC_RADIUS 120        // Rayon de l'arc du compte-tours
+#define RPM_MAX 7000              // RPM maximum affiché
+#define UPDATE_INTERVAL 1000      // Intervalle de mise à jour (ms)
+
+
 // Variables pour la gestion Wi-Fi
 static int s_retry_num = 0;
 static EventGroupHandle_t s_wifi_event_group;
@@ -94,6 +106,16 @@ static lv_color_t *cbuf = NULL; // Pointeur pour le buffer alloué dynamiquement
 static lv_obj_t *date_label = NULL; // Étiquette pour le jour du mois
 static lv_obj_t *date_window = NULL; // Rectangle pour la fenêtre de date
 static int last_day = -1; // Dernier jour affiché (-1 pour forcer la première mise à jour)
+
+static lv_obj_t *rpm_arc = NULL;      // Arc pour le compte-tours
+static lv_obj_t *speed_label = NULL;  // Étiquette pour la vitesse
+static lv_obj_t *gear_label = NULL;   // Étiquette pour le rapport de boîte
+static uint32_t rpm_pulse_count = 0;  // Compteur d'impulsions pour le compte-tours
+static uint32_t last_pulse_update = 0; // Dernière mise à jour des impulsions
+static uint16_t last_pcf8575_state = 0; // Dernier état du PCF8575 pour détecter les fronts
+static float gearbox_ratios[] = GEARBOX_RATIOS; // Tableau des rapports de boîte
+static int selected_gear = 4; // Rapport par défaut (4e vitesse, index 3)
+
 
 // Gestionnaire d'événements Wi-Fi
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
@@ -549,6 +571,13 @@ static void clock_timer_cb2() {
         ESP_LOGI("PCF8575", "État des broches: 0x%04X", pcf8575_state); // Log pour débogage
     }*/
 
+
+    // Détecter les fronts descendants (impulsion = 0) pour RPM
+    if ((last_pcf8575_state & (1 << PCF8575_PIN_RPM)) && !(pcf8575_state & (1 << PCF8575_PIN_RPM))) {
+        rpm_pulse_count++; // Incrémenter le compteur d'impulsions RPM
+    }
+    last_pcf8575_state = pcf8575_state; // Mémoriser l'état actuel
+
     // Mettre à jour les icônes
     update_dashboard_icons(pcf8575_state);
 
@@ -574,8 +603,55 @@ static void clock_timer_cb2() {
     // Dessiner la montre
     draw_clock(&hands);
 
+
+    
+    // Mettre à jour RPM et vitesse toutes les secondes
+    uint32_t current_time = esp_log_timestamp();
+    if (current_time - last_pulse_update >= UPDATE_INTERVAL) {
+        // Calculer RPM
+        float frequency = (float)rpm_pulse_count / (UPDATE_INTERVAL / 1000.0f); // Hz
+        uint32_t rpm = (uint32_t)(frequency * 30); // RPM = fréquence * 60 / 2
+        rpm_pulse_count = 0; // Réinitialiser le compteur
+
+        // Mettre à jour l'arc du compte-tours
+        lv_arc_set_value(rpm_arc, rpm > RPM_MAX ? RPM_MAX : rpm);
+
+        // Calculer la vitesse
+        float gear_ratio = gearbox_ratios[selected_gear];
+        float speed_kmh = 0.0f;
+        if (gear_ratio > 0.0f) { // Vérifier si ce n'est pas le neutre
+            speed_kmh = (rpm * WHEEL_CIRCUMFERENCE * 60.0f) / (gear_ratio * FINAL_DRIVE_RATIO * 1000.0f);
+        }
+
+        // Mettre à jour l'étiquette de vitesse
+        char speed_str[10];
+        snprintf(speed_str, sizeof(speed_str), "%.1f km/h", speed_kmh);
+        lv_label_set_text(speed_label, speed_str);
+
+        
+        // Log pour débogage
+        //ESP_LOGI("RPM_SPEED", "RPM: %u, Gear: %d, Speed: %.1f km/h", rpm, selected_gear, speed_kmh);
+
+        last_pulse_update = current_time;
+    }
     //debug
     //ESP_LOGI("PCF8575", "État des broches: 0x%04X", pcf8575_state);
+}
+
+// Callback pour le bouton "up" (augmenter le rapport de boîte)
+static void gear_up_cb(lv_event_t *e) {
+    if (selected_gear < 4) selected_gear++; // Ne pas dépasser la 4e
+    char gear_str[2];
+    snprintf(gear_str, sizeof(gear_str), "%d", selected_gear);
+    lv_label_set_text(gear_label, gear_str);
+}
+
+// Callback pour le bouton "down" (diminuer le rapport de boîte)
+static void gear_down_cb(lv_event_t *e) {
+    if (selected_gear > 0) selected_gear--; // Ne pas descendre en dessous de neutre
+    char gear_str[2];
+    snprintf(gear_str, sizeof(gear_str), "%d", selected_gear);
+    lv_label_set_text(gear_label, gear_str);
 }
 
 // Fonction d'initialisation de la montre
@@ -701,6 +777,49 @@ void clock_init(void) {
     lv_canvas_set_buffer(theCanvas, cbuf, CANVAS_WIDTH, CANVAS_HEIGHT, LV_IMG_CF_TRUE_COLOR_ALPHA);
     lv_obj_align(theCanvas, LV_ALIGN_CENTER, 0, 0);
     lv_canvas_fill_bg(theCanvas, lv_color_hex(0x000000), LV_OPA_TRANSP); // Fond transparent
+
+
+    // Créer l'arc du compte-tours
+    rpm_arc = lv_arc_create(background_canvas);
+    lv_obj_set_size(rpm_arc, RPM_ARC_RADIUS * 2, RPM_ARC_RADIUS * 2);
+    lv_arc_set_rotation(rpm_arc, 150); // Commencer à -30° (150° depuis 0)
+    lv_arc_set_bg_angles(rpm_arc, 0, 240); // Arc de 240°
+    lv_arc_set_range(rpm_arc, 0, RPM_MAX);
+    lv_obj_align(rpm_arc, LV_ALIGN_CENTER, -80, 0); // Position à gauche de la montre
+    lv_obj_set_style_arc_color(rpm_arc, lv_color_hex(0xFF0000), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(rpm_arc, 10, LV_PART_INDICATOR);
+    lv_arc_set_value(rpm_arc, 0); // Valeur initiale
+
+    // Créer l'étiquette pour la vitesse
+    speed_label = lv_label_create(background_canvas);
+    lv_label_set_text(speed_label, "0 km/h");
+    lv_obj_align(speed_label, LV_ALIGN_CENTER, 80, 0); // Position à droite de la montre
+    lv_obj_set_style_text_color(speed_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(speed_label, &lv_font_montserrat_16, LV_PART_MAIN);
+
+    // Créer l'étiquette pour le rapport de boîte
+    gear_label = lv_label_create(background_canvas);
+    lv_label_set_text(gear_label, "4"); // 4e vitesse par défaut
+    lv_obj_align(gear_label, LV_ALIGN_TOP_MID, 0, 20);
+    lv_obj_set_style_text_color(gear_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(gear_label, &lv_font_montserrat_16, LV_PART_MAIN);
+
+    // Créer des boutons pour changer le rapport de boîte
+    lv_obj_t *btn_up = lv_btn_create(background_canvas);
+    lv_obj_set_size(btn_up, 50, 30);
+    lv_obj_align(btn_up, LV_ALIGN_TOP_RIGHT, -10, 10);
+    lv_obj_t *label_up = lv_label_create(btn_up);
+    lv_label_set_text(label_up, "+");
+    lv_obj_center(label_up);
+    lv_obj_add_event_cb(btn_up, gear_up_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *btn_down = lv_btn_create(background_canvas);
+    lv_obj_set_size(btn_down, 50, 30);
+    lv_obj_align(btn_down, LV_ALIGN_TOP_RIGHT, -70, 10);
+    lv_obj_t *label_down = lv_label_create(btn_down);
+    lv_label_set_text(label_down, "-");
+    lv_obj_center(label_down);
+    lv_obj_add_event_cb(btn_down, gear_down_cb, LV_EVENT_CLICKED, NULL);
 
     // Dessiner la montre initialement
     clock_timer_cb2();

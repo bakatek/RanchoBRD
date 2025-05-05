@@ -26,3 +26,5 @@
 #define PCF8575_PIN_PHARE    6  // P6 pour l'icône phare
 #define PCF8575_PIN_PLEINPHARE 7 // P7 pour l'icône plein phare
 #define PCF8575_PIN_CLIGNOTANT 8 // P8 pour l'icône clignotant
+
+#define PCF8575_PIN_RPM 10 // entrée compte tour
