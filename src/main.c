@@ -43,6 +43,7 @@ Product weight              About 80g
 #include <nvs_flash.h>
 //#include <esp_bt.h>
 #include <esp_sntp.h>
+
 #include "pictos.h"
 #include "audio.h"
 #include "audio.c"
@@ -76,6 +77,7 @@ Product weight              About 80g
 #define UPDATE_INTERVAL 1000      // Intervalle de mise à jour (ms)
 
 
+
 // Variables pour la gestion Wi-Fi
 static int s_retry_num = 0;
 static EventGroupHandle_t s_wifi_event_group;
@@ -93,6 +95,9 @@ static esp_err_t pcf8575_read(uint16_t *value);
 /* Optimisations */
 
 static const char *TAG = "RANCHO_BRD";
+
+#define FIXED_TIMEZONE "CET-1CEST,M3.5.0,M10.5.0/3" // POSIX pour Europe/Paris (CET, DST mars-oct)
+#define SYS_EVT_STACK_SIZE 8192 // Taille de pile augmentée pour sys_evt
 
 // Structure pour stocker les points des aiguilles
 typedef struct {
@@ -126,17 +131,23 @@ static esp_err_t ds3231_write_time(struct tm *timeinfo);
 
 static bool sntp_initialized = false;
 
+
 // Callback pour la synchronisation NTP
 static void ntp_time_sync_notification_cb(struct timeval *tv) {
     ESP_LOGI("NTP", "Synchronisation NTP réussie, mise à jour du DS3231");
     struct tm timeinfo;
     time_t now = tv->tv_sec;
     localtime_r(&now, &timeinfo);
+    /*ESP_LOGI("NTP", "Heure NTP reçue (UTC): %ld, Heure locale: %02d:%02d:%02d %02d/%02d/%04d",
+             now, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+             timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);*/
     esp_err_t ret = ds3231_write_time(&timeinfo);
     if (ret != ESP_OK) {
         ESP_LOGE("NTP", "Échec de la mise à jour du DS3231");
     } else {
-        ESP_LOGI("NTP", "DS3231 mis à jour avec l'heure NTP");
+        ESP_LOGI("NTP", "DS3231 mis à jour avec l'heure NTP: %02d:%02d:%02d %02d/%02d/%04d",
+                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+                 timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
     }
 }
 
@@ -144,8 +155,34 @@ static void ntp_time_sync_notification_cb(struct timeval *tv) {
 static void ntp_init(void) {
     ESP_LOGI("NTP", "Initialisation de SNTP...");
     if (sntp_initialized) {
-        esp_sntp_stop(); // Arrêter le client SNTP s'il est déjà en cours
+        esp_sntp_stop();
     }
+
+    // Réappliquer le fuseau horaire
+    setenv("TZ", FIXED_TIMEZONE, 1);
+    tzset();
+    ESP_LOGI("NTP", "Fuseau horaire défini: %s", FIXED_TIMEZONE);
+
+    // Vérifier l'heure locale
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    struct tm timeinfo;
+    localtime_r(&tv_now.tv_sec, &timeinfo);
+    ESP_LOGI("NTP", "Heure locale avant NTP: %02d:%02d:%02d %02d/%02d/%04d",
+             timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+             timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
+
+    // Forcer la synchronisation du DS3231
+    esp_err_t ret = ds3231_write_time(&timeinfo);
+    if (ret != ESP_OK) {
+        ESP_LOGE("NTP", "Échec de l'initialisation du DS3231");
+    } else {
+        ESP_LOGI("NTP", "DS3231 initialisé avec l'heure locale: %02d:%02d:%02d %02d/%02d/%04d",
+                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+                 timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
+    }
+
+    // Configurer SNTP
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "pool.ntp.org");
     sntp_set_time_sync_notification_cb(ntp_time_sync_notification_cb);
@@ -174,7 +211,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
             vTaskDelay(pdMS_TO_TICKS(WIFI_RECONNECT_DELAY_MS));
             s_retry_num = 0;
             lv_timer_handler();
-            esp_wifi_connect(); // Nouvelle tentative après délai
+            esp_wifi_connect();
             lv_timer_handler();
         }
         sntp_initialized = false; // Réinitialiser SNTP lors de la déconnexion
@@ -183,15 +220,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ESP_LOGI(TAG, "Adresse IP obtenue: " IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-        if (!sntp_initialized) {
-            ntp_init(); // Initialiser SNTP seulement si pas déjà fait
-        }
+        ntp_init(); // Initialiser SNTP avec le fuseau horaire fixe
     }
 }
 
 
 static void wifi_init(void) {
-    // Initialiser NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -199,23 +233,17 @@ static void wifi_init(void) {
     }
     ESP_ERROR_CHECK(ret);
 
-    // Créer le groupe d'événements
     s_wifi_event_group = xEventGroupCreate();
-
-    // Initialiser la pile réseau
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
 
-    // Configurer le Wi-Fi
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    // Enregistrer le gestionnaire d'événements
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
 
-    // Configurer les paramètres du point d'accès
     wifi_config_t wifi_config = {
         .sta = {
             .ssid = WIFI_SSID,
@@ -229,13 +257,9 @@ static void wifi_init(void) {
 
     ESP_LOGI(TAG, "Initialisation Wi-Fi terminée, connexion à %s...", WIFI_SSID);
 
-    // Attendre la connexion ou l'échec
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Connecté au Wi-Fi");
-        if (!sntp_initialized) {
-            ntp_init(); // Initialiser SNTP après connexion réussie
-        }
     } else if (bits & WIFI_FAIL_BIT) {
         ESP_LOGE(TAG, "Échec initial de connexion au Wi-Fi, reconnexion automatique activée");
     }
@@ -984,10 +1008,20 @@ void setup(void){
 
 // Point d'entrée pour ESP32 (exemple pour ESP-IDF)
 void app_main(void) {
+    // Définir le fuseau horaire immédiatement
+    setenv("TZ", FIXED_TIMEZONE, 1);
+    tzset();
+    ESP_LOGI(TAG, "Fuseau horaire initial défini: %s", FIXED_TIMEZONE);
 
+    // Vérifier l'heure locale initiale
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    struct tm timeinfo;
+    localtime_r(&tv_now.tv_sec, &timeinfo);
+    ESP_LOGI(TAG, "Heure locale initiale: %02d:%02d:%02d %02d/%02d/%04d",
+             timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+             timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
 
-    // Désactiver Bluetooth
-    //esp_bt_controller_disable();
 
     // Vérifier que la PSRAM est disponible
     if (esp_psram_is_initialized()) {
@@ -1061,8 +1095,9 @@ void app_main(void) {
             EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
             if (bits & WIFI_CONNECTED_BIT) {
                 ESP_LOGI("SYNC", "Wi-Fi connecté, tentative de synchronisation NTP...");
-                // SNTP est déjà en cours, pas besoin de relancer ntp_init
-                // Attendre la synchronisation NTP (gérée par le callback)
+                if (!sntp_initialized) {
+                    ntp_init(); // Réinitialiser SNTP si nécessaire
+                }
             } else {
                 ESP_LOGI("SYNC", "Wi-Fi non connecté, synchronisation avec DS3231...");
                 esp_err_t ret = ds3231_sync_time();
