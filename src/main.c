@@ -109,14 +109,18 @@ static lv_obj_t *date_label = NULL; // Étiquette pour le jour du mois
 static lv_obj_t *date_window = NULL; // Rectangle pour la fenêtre de date
 static int last_day = -1; // Dernier jour affiché (-1 pour forcer la première mise à jour)
 
-static lv_obj_t *rpm_bar = NULL;      // Barre pour le compte-tours
-static lv_obj_t *speed_label = NULL;  // Étiquette pour la vitesse
-static lv_obj_t *gear_label = NULL;   // Étiquette pour le rapport de boîte
-static uint32_t rpm_pulse_count = 0;  // Compteur d'impulsions pour le compte-tours
-static uint32_t last_pulse_update = 0; // Dernière mise à jour des impulsions
-static uint16_t last_pcf8575_state = 0; // Dernier état du PCF8575 pour détecter les fronts
-static float gearbox_ratios[] = {3.714, 2.222, 1.409, 1.000, 0.0}; // Rapports de boîte
-static int selected_gear = 4; // Rapport par défaut (4e vitesse, index 3)
+// Déclarations globales (au début de main.c, après autres variables globales)
+static lv_obj_t *background_canvas = NULL;
+static lv_obj_t *rpm_bar = NULL;
+static lv_obj_t *speed_label = NULL;
+static lv_obj_t *gear_label = NULL;
+static lv_obj_t *btn_up = NULL;
+static lv_obj_t *btn_down = NULL;
+static uint32_t rpm_pulse_count = 0;
+static uint32_t last_pulse_update = 0;
+static uint16_t last_pcf8575_state = 0;
+static float gearbox_ratios[] = {3.714, 2.222, 1.409, 1.000, 0.0};
+static int selected_gear = 4;
 
 static esp_err_t ds3231_write_time(struct tm *timeinfo);
 
@@ -865,7 +869,7 @@ void clock_init(void) {
     // Créer l'étiquette pour la vitesse
     speed_label = lv_label_create(background_canvas);
     lv_label_set_text(speed_label, "0 km/h");
-    lv_obj_align(speed_label, LV_ALIGN_BOTTOM_RIGHT, -40, -50); // Au-dessus des boutons, centré entre btn_up et btn_down
+    lv_obj_align(speed_label, LV_ALIGN_BOTTOM_RIGHT, -40, -50); // Au-dessus des boutons
     lv_obj_set_style_text_color(speed_label, lv_color_white(), LV_PART_MAIN);
     lv_obj_set_style_text_font(speed_label, &lv_font_montserrat_16, LV_PART_MAIN);
 
@@ -877,7 +881,7 @@ void clock_init(void) {
     lv_obj_set_style_text_font(gear_label, &lv_font_montserrat_16, LV_PART_MAIN);
 
     // Créer des boutons pour changer le rapport de boîte
-    lv_obj_t *btn_up = lv_btn_create(background_canvas);
+    btn_up = lv_btn_create(background_canvas);
     lv_obj_set_size(btn_up, 50, 30);
     lv_obj_align(btn_up, LV_ALIGN_BOTTOM_RIGHT, -10, -10); // Bas à droite, 10px du bord droit, 10px du bas
     lv_obj_t *label_up = lv_label_create(btn_up);
@@ -885,7 +889,7 @@ void clock_init(void) {
     lv_obj_center(label_up);
     lv_obj_add_event_cb(btn_up, gear_up_cb, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *btn_down = lv_btn_create(background_canvas);
+    btn_down = lv_btn_create(background_canvas);
     lv_obj_set_size(btn_down, 50, 30);
     lv_obj_align(btn_down, LV_ALIGN_BOTTOM_RIGHT, -70, -10); // Bas à droite, 70px du bord droit, 10px du bas
     lv_obj_t *label_down = lv_label_create(btn_down);
@@ -897,6 +901,57 @@ void clock_init(void) {
     clock_timer_cb2();
 }
 
+
+static void clean_display(void) {
+    ESP_LOGI("DISPLAY", "Nettoyage de l'affichage pour supprimer les glitches...");
+
+    // Verrouiller l'affichage
+    bsp_display_lock(0);
+
+    // Effacer le canvas (remettre à la couleur de fond, noir par défaut)
+    lv_obj_invalidate(background_canvas);
+    lv_obj_set_style_bg_color(background_canvas, lv_color_black(), LV_PART_MAIN);
+    lv_refr_now(NULL); // Forcer un rafraîchissement immédiat
+
+    // Redessiner la montre (basé sur l'heure actuelle)
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    struct tm *timeinfo = localtime(&tv_now.tv_sec);
+    int hour = timeinfo->tm_hour;
+    int minute = timeinfo->tm_min;
+    int second = timeinfo->tm_sec;
+    int millisecond = tv_now.tv_usec / 1000;
+
+    clock_hands_t hands;
+    get_hour_hand_end(hour, minute, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, HOUR_HAND_LENGTH, &hands.hour_end);
+    get_minute_hand_end(minute, second, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, MINUTE_HAND_LENGTH, &hands.minute_end);
+    get_second_hand_end(second, millisecond, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, SECOND_HAND_LENGTH, &hands.second_end);
+    draw_clock(&hands);
+
+    // Redessiner la barre du compte-tours (conserver la valeur actuelle)
+    lv_bar_set_value(rpm_bar, lv_bar_get_value(rpm_bar), LV_ANIM_OFF);
+
+    // Redessiner l'étiquette de vitesse
+    lv_label_set_text(speed_label, lv_label_get_text(speed_label));
+
+    // Redessiner l'étiquette du rapport de boîte
+    lv_label_set_text(gear_label, lv_label_get_text(gear_label));
+
+    // Redessiner les boutons de changement de vitesse
+    lv_obj_invalidate(btn_up);
+    lv_obj_invalidate(btn_down);
+
+    // Redessiner les icônes (si applicable)
+    update_dashboard_icons(last_pcf8575_state);
+
+    // Forcer un rafraîchissement complet
+    lv_refr_now(NULL);
+
+    // Déverrouiller l'affichage
+    bsp_display_unlock();
+
+    ESP_LOGI("DISPLAY", "Nettoyage terminé");
+}
 
 void setup(void){
     bsp_display_cfg_t cfg = {
@@ -965,7 +1020,7 @@ void app_main(void) {
     // Initialiser le Wi-Fi
     wifi_init();
 
-    vTaskDelay(10000 / portTICK_PERIOD_MS);
+    //vTaskDelay(10000 / portTICK_PERIOD_MS);
 
     // Initialiser LVGL et le pilote d'affichage (à configurer selon votre écran)
     //lv_init();
@@ -1018,6 +1073,13 @@ void app_main(void) {
                 }
             }
             last_sync = current_time;
+        }
+
+        // Nettoyer l'affichage toutes les 60 secondes
+        static uint32_t last_clean = 0;
+        if (current_time - last_clean >= 60) {
+            clean_display();
+            last_clean = current_time;
         }
     }
 
